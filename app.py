@@ -1,7 +1,7 @@
 #!/usr/bin/env -S python3.10
 """
-Web Crawler UI — Flask app
-Drop a URL, watch it crawl, get results in browser + download JSON/PDF.
+Web Crawler UI — local Flask server
+Drop a URL, watch it crawl, download PDF/JSON.
 """
 
 import json
@@ -9,21 +9,19 @@ import os
 import threading
 import time
 import uuid
+from io import BytesIO
 from urllib.parse import urlparse
 
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_file
 
-from crawler import crawl, save_results
+from crawler import crawl as run_crawl, _save_pdf_bytes, save_results
 
 app = Flask(__name__)
 
-# In-memory job store (fine for single-user local use)
+# In-memory job store
 jobs: dict[str, dict] = {}
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -31,7 +29,7 @@ def index():
 
 @app.route("/api/crawl", methods=["POST"])
 def start_crawl():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     url = data.get("url", "").strip()
     max_pages = int(data.get("max_pages", 50))
     delay = float(data.get("delay", 0.3))
@@ -39,7 +37,6 @@ def start_crawl():
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
-    # Add scheme if missing
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
@@ -54,70 +51,65 @@ def start_crawl():
         "pdf_path": None,
     }
 
-    # Run crawl in background thread
-    def run_crawl():
+    def run():
+        from collections import deque
+        import crawler as _c
+
         try:
-            # Patch crawl to stream progress
-            _progress = jobs[job_id]["progress"]
+            parsed = urlparse(url)
+            base_domain = f"{parsed.scheme}://{parsed.netloc}"
+            start_url = _c.normalize_url(url)
 
-            import crawler as _c
-            _orig = _c.crawl
+            visited = set()
+            queue = deque([start_url])
+            pages = []
+            all_external = set()
+            errors = []
 
-            def _patched_crawl(start_url, max_pages=max_pages, delay=delay):
-                from collections import deque
-                parsed = urlparse(start_url)
-                base_domain = f"{parsed.scheme}://{parsed.netloc}"
-                start_url = _c.normalize_url(start_url)
+            while queue and len(visited) < max_pages:
+                u = queue.popleft()
+                u = _c.normalize_url(u)
+                if u in visited:
+                    continue
+                visited.add(u)
 
-                visited = set()
-                queue = deque([start_url])
-                pages = []
-                all_external = set()
-                errors = []
+                jobs[job_id]["progress"].append({
+                    "page": len(visited),
+                    "total": max_pages,
+                    "url": u,
+                })
 
-                while queue and len(visited) < max_pages:
-                    url = queue.popleft()
-                    url = _c.normalize_url(url)
-                    if url in visited:
-                        continue
-                    visited.add(url)
+                page = _c.scrape_page(u)
+                if page is None:
+                    continue
+                if "error" in page:
+                    errors.append(page)
+                    continue
 
-                    _progress.append({"page": len(visited), "total": max_pages, "url": url})
+                pages.append(page)
+                all_external.update(page["links"]["external"])
 
-                    page = _c.scrape_page(url)
-                    if page is None:
-                        continue
-                    if "error" in page:
-                        errors.append(page)
-                        continue
+                for link in page["links"]["internal"]:
+                    norm = _c.normalize_url(link)
+                    if norm not in visited and _c.is_same_domain(norm, base_domain):
+                        queue.append(norm)
 
-                    pages.append(page)
-                    all_external.update(page["links"]["external"])
+                time.sleep(delay)
 
-                    for link in page["links"]["internal"]:
-                        norm = _c.normalize_url(link)
-                        if norm not in visited and _c.is_same_domain(norm, base_domain):
-                            queue.append(norm)
-
-                    time.sleep(delay)
-
-                result = {
-                    "start_url": start_url,
-                    "base_domain": base_domain,
-                    "pages_crawled": len(pages),
-                    "pages_with_errors": len(errors),
-                    "total_internal_links": len(set(
-                        link for p in pages for link in p["links"]["internal"]
-                    )),
-                    "total_external_links": len(all_external),
-                    "pages": pages,
-                    "external_links": sorted(all_external),
-                }
-                if errors:
-                    result["errors"] = errors
-                return result
-
-            result = _patched_crawl(url, max_pages=max_pages, delay=delay)
+            result = {
+                "start_url": start_url,
+                "base_domain": base_domain,
+                "pages_crawled": len(pages),
+                "pages_with_errors": len(errors),
+                "total_internal_links": len(set(
+                    link for p in pages for link in p["links"]["internal"]
+                )),
+                "total_external_links": len(all_external),
+                "pages": pages,
+                "external_links": sorted(all_external),
+            }
+            if errors:
+                result["errors"] = errors
 
             json_path, pdf_path = save_results(result)
             jobs[job_id]["status"] = "done"
@@ -129,7 +121,7 @@ def start_crawl():
             jobs[job_id]["status"] = "error"
             jobs[job_id]["error"] = str(e)
 
-    thread = threading.Thread(target=run_crawl, daemon=True)
+    thread = threading.Thread(target=run, daemon=True)
     thread.start()
 
     return jsonify({"job_id": job_id})
@@ -145,12 +137,11 @@ def job_status(job_id):
         "id": job["id"],
         "status": job["status"],
         "url": job["url"],
-        "progress": job["progress"][-5:],  # last 5 progress items
+        "progress": job["progress"][-5:],
     }
 
     if job["status"] == "done" and job["result"]:
         r = job["result"]
-        # Build a lightweight summary for the UI (skip huge pages array)
         pages_summary = []
         for p in r.get("pages", []):
             pages_summary.append({
@@ -197,10 +188,7 @@ def download(job_id, file_type):
         return jsonify({"error": "Invalid file type"}), 400
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     os.makedirs("output", exist_ok=True)
-    print("\n  Web Crawler UI starting at http://localhost:8080\n")
+    print("\n  Web Crawler UI -> http://localhost:8080\n")
     app.run(debug=True, host="0.0.0.0", port=8080)

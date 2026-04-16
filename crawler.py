@@ -1,4 +1,3 @@
-#!/usr/bin/env -S python3.10
 """
 Web Crawler & Scraper
 - Paste a URL, it crawls the entire site
@@ -7,8 +6,8 @@ Web Crawler & Scraper
 - Saves structured JSON + PDF output
 """
 
-import json
 import io
+import json
 import re
 import sys
 import time
@@ -22,8 +21,8 @@ from bs4 import BeautifulSoup
 # Configuration
 # ---------------------------------------------------------------------------
 DEFAULT_MAX_PAGES = 500
-DEFAULT_DELAY = 0.3  # seconds between requests (be polite)
-REQUEST_TIMEOUT = 15  # seconds
+DEFAULT_DELAY = 0.3
+REQUEST_TIMEOUT = 15
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -37,34 +36,28 @@ HEADERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 def is_same_domain(url: str, base_domain: str) -> bool:
-    """Check if a URL belongs to the same domain."""
     parsed = urlparse(url)
     base_parsed = urlparse(base_domain)
-    # Match on netloc, ignoring www prefix
     host = parsed.netloc.replace("www.", "")
     base_host = base_parsed.netloc.replace("www.", "")
     return host == base_host or host.endswith("." + base_host)
 
 
 def normalize_url(url: str) -> str:
-    """Strip fragments and trailing slashes for dedup."""
     parsed = urlparse(url)
     path = parsed.path.rstrip("/") or "/"
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
 def clean_text(soup: BeautifulSoup) -> str:
-    """Extract visible text from a page, removing scripts/styles."""
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
+    for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     text = soup.get_text(separator="\n")
-    # Collapse excessive blank lines
     lines = [line.strip() for line in text.splitlines()]
     return "\n".join(line for line in lines if line)
 
 
 def extract_images(soup: BeautifulSoup, page_url: str) -> list[dict]:
-    """Pull all images with their src, alt, and title."""
     images = []
     seen = set()
     for img in soup.find_all("img"):
@@ -84,20 +77,15 @@ def extract_images(soup: BeautifulSoup, page_url: str) -> list[dict]:
 
 
 def extract_metadata(soup: BeautifulSoup) -> dict:
-    """Pull SEO / Open Graph / Twitter meta tags."""
     meta = {}
-    # Title
     title_tag = soup.find("title")
     meta["title"] = title_tag.get_text(strip=True) if title_tag else ""
-    # Description
     desc = soup.find("meta", attrs={"name": "description"})
     meta["description"] = desc["content"] if desc and desc.get("content") else ""
-    # OG tags
     for tag in soup.find_all("meta", attrs={"property": re.compile(r"^og:")}):
         key = tag.get("property", "").replace("og:", "og_")
         if tag.get("content"):
             meta[key] = tag["content"]
-    # Twitter tags
     for tag in soup.find_all("meta", attrs={"name": re.compile(r"^twitter:")}):
         key = tag.get("name", "").replace("twitter:", "twitter_")
         if tag.get("content"):
@@ -106,7 +94,6 @@ def extract_metadata(soup: BeautifulSoup) -> dict:
 
 
 def extract_links(soup: BeautifulSoup, page_url: str) -> dict:
-    """Return {'internal': [...], 'external': [...]} links found on the page."""
     internal = set()
     external = set()
     base_domain = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}"
@@ -116,7 +103,6 @@ def extract_links(soup: BeautifulSoup, page_url: str) -> dict:
         if not href or href.startswith(("#", "javascript:", "mailto:", "tel:", "data:")):
             continue
         full_url = urljoin(page_url, href)
-        # Skip non-http
         if urlparse(full_url).scheme not in ("http", "https"):
             continue
         norm = normalize_url(full_url)
@@ -125,20 +111,13 @@ def extract_links(soup: BeautifulSoup, page_url: str) -> dict:
         else:
             external.add(norm)
 
-    return {
-        "internal": sorted(internal),
-        "external": sorted(external),
-    }
+    return {"internal": sorted(internal), "external": sorted(external)}
 
 
-def extract_headings(soup: BeautifulSoup) -> dict:
-    """Extract h1-h6 headings with their hierarchy."""
+def extract_headings(soup: BeautifulSoup) -> list[dict]:
     headings = []
     for tag in soup.find_all(re.compile(r"^h[1-6]$")):
-        headings.append({
-            "level": int(tag.name[1]),
-            "text": tag.get_text(strip=True),
-        })
+        headings.append({"level": int(tag.name[1]), "text": tag.get_text(strip=True)})
     return headings
 
 
@@ -146,7 +125,6 @@ def extract_headings(soup: BeautifulSoup) -> dict:
 # Page scraper
 # ---------------------------------------------------------------------------
 def scrape_page(url: str) -> dict | None:
-    """Fetch and parse a single page. Returns structured dict or None."""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
         content_type = resp.headers.get("Content-Type", "")
@@ -158,7 +136,6 @@ def scrape_page(url: str) -> dict | None:
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Extract everything
     links = extract_links(soup, url)
     metadata = extract_metadata(soup)
     images = extract_images(soup, url)
@@ -184,10 +161,6 @@ def scrape_page(url: str) -> dict | None:
 # Crawler
 # ---------------------------------------------------------------------------
 def crawl(start_url: str, max_pages: int = DEFAULT_MAX_PAGES, delay: float = DEFAULT_DELAY) -> dict:
-    """
-    Crawl a website starting from `start_url`.
-    Returns a dict with all scraped pages and the site map.
-    """
     parsed = urlparse(start_url)
     base_domain = f"{parsed.scheme}://{parsed.netloc}"
     start_url = normalize_url(start_url)
@@ -198,8 +171,8 @@ def crawl(start_url: str, max_pages: int = DEFAULT_MAX_PAGES, delay: float = DEF
     all_external: set[str] = set()
     errors: list[dict] = []
 
-    print(f"\n🕷  Crawling: {start_url}")
-    print(f"   Max pages: {max_pages} | Delay: {delay}s\n")
+    print(f"\n  Crawling: {start_url}")
+    print(f"  Max pages: {max_pages} | Delay: {delay}s\n")
 
     while queue and len(visited) < max_pages:
         url = queue.popleft()
@@ -221,7 +194,6 @@ def crawl(start_url: str, max_pages: int = DEFAULT_MAX_PAGES, delay: float = DEF
         pages.append(page)
         all_external.update(page["links"]["external"])
 
-        # Queue internal links we haven't visited
         for link in page["links"]["internal"]:
             norm = normalize_url(link)
             if norm not in visited and is_same_domain(norm, base_domain):
@@ -229,7 +201,6 @@ def crawl(start_url: str, max_pages: int = DEFAULT_MAX_PAGES, delay: float = DEF
 
         time.sleep(delay)
 
-    # Build output
     result = {
         "start_url": start_url,
         "base_domain": base_domain,
@@ -250,37 +221,13 @@ def crawl(start_url: str, max_pages: int = DEFAULT_MAX_PAGES, delay: float = DEF
 
 
 # ---------------------------------------------------------------------------
-# Save
+# PDF generation
 # ---------------------------------------------------------------------------
-def save_results(data: dict, output_dir: str = "output") -> tuple[str, str]:
-    """Save crawl results as JSON + PDF. Returns (json_path, pdf_path)."""
-    import os
-    os.makedirs(output_dir, exist_ok=True)
-
-    domain = urlparse(data["base_domain"]).netloc.replace("www.", "")
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-
-    # --- JSON ---
-    json_file = f"{domain}_{timestamp}.json"
-    json_path = os.path.join(output_dir, json_file)
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-    # --- PDF ---
-    pdf_file = f"{domain}_{timestamp}.pdf"
-    pdf_path = os.path.join(output_dir, pdf_file)
-    _save_pdf(data, pdf_path)
-
-    return json_path, pdf_path
-
-
 def _safe_text(text: str) -> str:
-    """Make text safe for FPDF (Latin-1 encoding)."""
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
 def _build_pdf(data: dict):
-    """Build a FPDF object from crawl data (shared by file save and bytes)."""
     from fpdf import FPDF
 
     pdf = FPDF()
@@ -301,7 +248,7 @@ def _build_pdf(data: dict):
         pdf.set_font("Helvetica", "", 9)
         pdf.cell(0, 5, _safe_text(label_text), new_x="LMARGIN", new_y="NEXT")
 
-    # --- Cover / Summary page ---
+    # Cover page
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 24)
     pdf.ln(30)
@@ -310,20 +257,18 @@ def _build_pdf(data: dict):
     pdf.ln(5)
     pdf.cell(0, 10, _safe_text(data["base_domain"]), new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(15)
-
     pdf.set_font("Helvetica", "", 11)
-    summary_lines = [
+    for line in [
         f"Start URL:          {_safe_text(data['start_url'])}",
         f"Pages scraped:      {data['pages_crawled']}",
         f"Pages w/ errors:    {data['pages_with_errors']}",
         f"Internal links:     {data['total_internal_links']}",
         f"External links:     {data['total_external_links']}",
-    ]
-    for line in summary_lines:
+    ]:
         pdf.set_x(pdf.l_margin)
         pdf.cell(0, 7, line, new_x="LMARGIN", new_y="NEXT")
 
-    # --- Each page ---
+    # Each page
     for page in data.get("pages", []):
         pdf.add_page()
 
@@ -415,52 +360,29 @@ def _build_pdf(data: dict):
 
 
 def _save_pdf_bytes(data: dict) -> bytes:
-    """Generate PDF as bytes (for serverless / in-memory use)."""
     pdf = _build_pdf(data)
     buf = io.BytesIO()
     pdf.output(buf)
     return buf.getvalue()
 
 
-def _save_pdf(data: dict, filepath: str):
-    """Generate a PDF report and save to file."""
-    pdf = _build_pdf(data)
-    pdf.output(filepath)
+def save_results(data: dict, output_dir: str = "output") -> tuple[str, str]:
+    import os
+    os.makedirs(output_dir, exist_ok=True)
 
+    domain = urlparse(data["base_domain"]).netloc.replace("www.", "")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
 
-# ---------------------------------------------------------------------------
-# Summary printer
-# ---------------------------------------------------------------------------
-def print_summary(data: dict):
-    """Print a clean summary of what was crawled."""
-    print("\n" + "=" * 60)
-    print("  CRAWL SUMMARY")
-    print("=" * 60)
-    print(f"  Site:              {data['base_domain']}")
-    print(f"  Pages scraped:     {data['pages_crawled']}")
-    print(f"  Pages w/ errors:   {data['pages_with_errors']}")
-    print(f"  Internal links:    {data['total_internal_links']}")
-    print(f"  External links:    {data['total_external_links']}")
+    json_file = f"{domain}_{timestamp}.json"
+    json_path = os.path.join(output_dir, json_file)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
-    # Top pages by word count
-    if data["pages"]:
-        top = sorted(data["pages"], key=lambda p: p.get("word_count", 0), reverse=True)[:5]
-        print("\n  Top 5 pages by content:")
-        for p in top:
-            print(f"    {p['word_count']:>6} words | {p['url']}")
+    pdf_file = f"{domain}_{timestamp}.pdf"
+    pdf_path = os.path.join(output_dir, pdf_file)
+    _build_pdf(data).output(pdf_path)
 
-    # Top external domains
-    if data["external_links"]:
-        domains = {}
-        for link in data["external_links"]:
-            d = urlparse(link).netloc
-            domains[d] = domains.get(d, 0) + 1
-        top_domains = sorted(domains.items(), key=lambda x: x[1], reverse=True)[:5]
-        print("\n  Top 5 external domains:")
-        for d, count in top_domains:
-            print(f"    {count:>4} links | {d}")
-
-    print("=" * 60)
+    return json_path, pdf_path
 
 
 # ---------------------------------------------------------------------------
@@ -468,8 +390,8 @@ def print_summary(data: dict):
 # ---------------------------------------------------------------------------
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 crawler.py <URL> [max_pages] [delay_seconds]")
-        print("Example: python3 crawler.py https://example.com 100 0.3")
+        print("Usage: python3.10 crawler.py <URL> [max_pages] [delay_seconds]")
+        print("Example: python3.10 crawler.py https://example.com 100 0.3")
         sys.exit(1)
 
     start_url = sys.argv[1]
@@ -478,7 +400,6 @@ def main():
 
     data = crawl(start_url, max_pages=max_pages, delay=delay)
     json_path, pdf_path = save_results(data)
-    print_summary(data)
     print(f"\n  JSON saved to: {json_path}")
     print(f"  PDF  saved to: {pdf_path}\n")
 
