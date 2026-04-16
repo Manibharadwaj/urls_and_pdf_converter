@@ -8,6 +8,7 @@ Web Crawler & Scraper
 """
 
 import json
+import io
 import re
 import sys
 import time
@@ -278,8 +279,8 @@ def _safe_text(text: str) -> str:
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
-def _save_pdf(data: dict, filepath: str):
-    """Generate a PDF report from crawl data."""
+def _build_pdf(data: dict):
+    """Build a FPDF object from crawl data (shared by file save and bytes)."""
     from fpdf import FPDF
 
     pdf = FPDF()
@@ -287,7 +288,6 @@ def _save_pdf(data: dict, filepath: str):
     pdf.set_auto_page_break(auto=True, margin=20)
 
     def safe_mc(w, h, txt, **kw):
-        """multi_cell that always resets x to left margin first."""
         pdf.set_x(pdf.l_margin)
         pdf.multi_cell(w, h, _safe_text(txt), **kw)
 
@@ -327,13 +327,11 @@ def _save_pdf(data: dict, filepath: str):
     for page in data.get("pages", []):
         pdf.add_page()
 
-        # URL heading
         pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(20, 80, 160)
         safe_mc(0, 8, page["url"])
         pdf.set_text_color(0, 0, 0)
 
-        # Metadata
         meta = page.get("metadata", {})
         if meta.get("title"):
             pdf.set_font("Helvetica", "B", 12)
@@ -351,7 +349,6 @@ def _save_pdf(data: dict, filepath: str):
         pdf.cell(0, 5, f"Status: {page.get('status_code', '?')}  |  Words: {page.get('word_count', 0)}  |  Images: {page.get('image_count', 0)}  |  Int. links: {page.get('internal_link_count', 0)}  |  Ext. links: {page.get('external_link_count', 0)}", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
-        # Headings
         headings = page.get("headings", [])
         if headings:
             section("Headings:")
@@ -361,7 +358,6 @@ def _save_pdf(data: dict, filepath: str):
                 safe_mc(0, 5, f"{prefix}H{h['level']}: {h['text']}")
             pdf.ln(2)
 
-        # Page text
         text = page.get("text", "")
         if text:
             section("Page Content:")
@@ -374,7 +370,6 @@ def _save_pdf(data: dict, filepath: str):
                 safe_mc(0, 5, paragraph)
             pdf.ln(3)
 
-        # Images
         images = page.get("images", [])
         if images:
             section(f"Images ({len(images)}):")
@@ -386,7 +381,6 @@ def _save_pdf(data: dict, filepath: str):
                 safe_mc(0, 4, line)
             pdf.ln(2)
 
-        # Links
         links = page.get("links", {})
         if links.get("internal"):
             section(f"Internal Links ({len(links['internal'])}):")
@@ -406,7 +400,6 @@ def _save_pdf(data: dict, filepath: str):
                 label(f"  ... and {len(links['external']) - 30} more")
             pdf.ln(2)
 
-    # --- External links appendix ---
     if data.get("external_links"):
         pdf.add_page()
         pdf.set_font("Helvetica", "B", 14)
@@ -418,6 +411,20 @@ def _save_pdf(data: dict, filepath: str):
         for link in data["external_links"]:
             safe_mc(0, 4, f"  - {link}")
 
+    return pdf
+
+
+def _save_pdf_bytes(data: dict) -> bytes:
+    """Generate PDF as bytes (for serverless / in-memory use)."""
+    pdf = _build_pdf(data)
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
+def _save_pdf(data: dict, filepath: str):
+    """Generate a PDF report and save to file."""
+    pdf = _build_pdf(data)
     pdf.output(filepath)
 
 
