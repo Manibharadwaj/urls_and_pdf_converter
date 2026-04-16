@@ -156,7 +156,7 @@ def scrape_page(url: str) -> dict | None:
     except requests.RequestException as e:
         return {"url": url, "error": str(e)}
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(resp.text, "html.parser")
 
     # Extract everything
     links = extract_links(soup, url)
