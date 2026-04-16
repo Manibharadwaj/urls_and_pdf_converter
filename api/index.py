@@ -1,5 +1,4 @@
 """Vercel Flask serverless app — single entry point for all routes."""
-import base64
 import json
 import os
 from io import BytesIO
@@ -7,7 +6,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, request, jsonify, send_from_directory, send_file
 
-from crawler import crawl as run_crawl, _save_pdf_bytes
+from api.crawler import crawl as run_crawl, _save_pdf_bytes
 
 app = Flask(__name__, static_folder=None)
 
@@ -15,9 +14,11 @@ app = Flask(__name__, static_folder=None)
 # ---------------------------------------------------------------------------
 # Static frontend
 # ---------------------------------------------------------------------------
+PUBLIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public")
+
 @app.route("/")
 def index():
-    return send_from_directory(os.path.join(os.path.dirname(os.path.dirname(__file__)), "public"), "index.html")
+    return send_from_directory(PUBLIC_DIR, "index.html")
 
 
 # ---------------------------------------------------------------------------
